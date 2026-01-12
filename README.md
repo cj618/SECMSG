@@ -40,7 +40,3 @@ For the initial POC we use **Base64 line frames**:
 ```
 
 See `doc/protocol.md` and `doc/man/*`.
-
-## Status
-- v0.0 scaffold: framing + minimal relay + minimal client I/O.
-- Crypto and robust auth are intentionally not implemented yet.
