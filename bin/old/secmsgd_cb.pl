@@ -5,15 +5,31 @@
 #
 #
 # Copyright (c) 2026 C R Jervis
-# BSD 2-Clause License (see LICENSE)
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+# 1. Redistributions of source code must retain the above copyright notice,
+#    this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
 #
 
 use strict;
 use warnings;
 
 use Getopt::Long qw(GetOptions);
-Getopt::Long::Configure('no_ignore_case');
-
 use IO::Select;
 use MIME::Base64 qw(encode_base64 decode_base64);
 use Digest::SHA qw(sha256);
@@ -55,12 +71,13 @@ sub _new_listen_socket {
     }
 }
 
-sub sha256_hex { unpack("H*", sha256($_[0] // '')) }
-
 sub _rand_id {
+    # stable length, opaque routing id
     my $seed = join(":", time(), $$, rand(), {});
     return substr(sha256_hex($seed), 0, 16);
 }
+
+sub sha256_hex { unpack("H*", sha256($_[0] // '')) }
 
 # --- Framing (Base64 line frames) -----------------------------------------
 use constant PROTO_VERSION => 1;
@@ -154,23 +171,26 @@ while (1) {
             next;
         }
 
+        # Accept H (hello) but ignore it.
         next if $type eq 'H';
 
+        # Only message frames exist in radio net mode.
         if ($type ne 'M') {
             _send_err($fh, "unsupported type");
             next;
         }
 
-        # Client payload: "" "\0" nonce_b64 "\0" tag_hex "\0" rot13_b64ct
-        my (undef, $nonce_b64, $tag_hex, $rot13_b64ct) = split(/\0/, $bytes, 4);
-        if (!defined $nonce_b64 || !defined $tag_hex || !defined $rot13_b64ct) {
+        # Client payload: "" "\0" nonce_b64 "\0" tag_hex "\0" ct_b64
+        my (undef, $nonce_b64, $tag_hex, $ct_b64) = split(/\0/, $bytes, 4);
+        if (!defined $nonce_b64 || !defined $tag_hex || !defined $ct_b64) {
             _send_err($fh, "bad message payload");
             next;
         }
 
         my $sender_id = $fh_to_id{ fileno($fh) } // 'unknown';
-        my $out = join("\0", $sender_id, $nonce_b64, $tag_hex, $rot13_b64ct);
+        my $out = join("\0", $sender_id, $nonce_b64, $tag_hex, $ct_b64);
 
+        # Broadcast to everyone else (CB-style).
         my $sender_fn = fileno($fh);
         for my $fn (keys %fh_to_sock) {
             next if $fn == $sender_fn;

@@ -5,22 +5,35 @@
 #
 #
 # Copyright (c) 2026 C R Jervis
-# BSD 2-Clause License (see LICENSE)
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+# 1. Redistributions of source code must retain the above copyright notice,
+#    this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+#    this list of conditions and the following disclaimer in the documentation
+#    and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
 #
 
 use strict;
 use warnings;
 
 use Getopt::Long qw(GetOptions);
-Getopt::Long::Configure('no_ignore_case'); # allow -k and -K to differ
-
+Getopt::Long::Configure('no_ignore_case');
 use IO::Select;
-
-use FindBin;
-use lib "$FindBin::Bin/lib";
-
-use SecMsg::Crypto qw(seal_message open_message);
-use MIME::Base64 qw(decode_base64);
+use MIME::Base64 qw(encode_base64 decode_base64);
+use Digest::SHA qw(sha256 hmac_sha256);
 
 # --- Compatibility / portability ------------------------------------------
 sub _have_module {
@@ -55,8 +68,21 @@ sub _new_tcp_socket {
     }
 }
 
+sub _rand_bytes {
+    my ($n) = @_;
+    $n //= 16;
+    my $buf = '';
+    if (open my $fh, '<', '/dev/urandom') {
+        read($fh, $buf, $n);
+        close $fh;
+        return $buf if length($buf) == $n;
+    }
+    # Fallback: not cryptographically strong, but keeps the POC portable.
+    for (1..$n) { $buf .= chr(int(rand(256))); }
+    return $buf;
+}
+
 # --- Framing (Base64 line frames) -----------------------------------------
-use MIME::Base64 qw(encode_base64 decode_base64);
 use constant PROTO_VERSION => 1;
 
 sub encode_frame {
@@ -78,6 +104,60 @@ sub decode_frame {
     die "decode_frame: bad version\n" unless $version =~ /^\d+$/;
     my $bytes = decode_base64($b64);
     return ($type, int($version), $bytes);
+}
+
+# --- "Layered cryptographic stack" (POC) ----------------------------------
+# NOTE: This is intentionally lightweight and self-contained (no XS deps).
+# It provides confidentiality + tamper detection (HMAC), but it is not meant
+# to be presented as modern, reviewed cryptography.
+#
+# Envelope format (bytes in frame payload):
+#   sender_id "\0" nonce_b64 "\0" tag_hex "\0" ct_b64
+#
+# tag = HMAC-SHA256(key, nonce || ciphertext)   (hex-encoded)
+# keystream = SHA256(key || nonce || counter) repeated, XOR with plaintext
+#
+sub _xor_stream {
+    my ($key, $nonce, $data) = @_;
+    my $out = '';
+    my $i = 0;
+    my $off = 0;
+    while ($off < length($data)) {
+        my $block = sha256($key . $nonce . pack("N", $i));
+        my $take = length($data) - $off;
+        $take = 32 if $take > 32;
+        my $chunk = substr($data, $off, $take);
+        my $mask  = substr($block, 0, $take);
+        $out .= ($chunk ^ $mask);
+        $off += $take;
+        $i++;
+    }
+    return $out;
+}
+
+sub seal_message {
+    my (%args) = @_;
+    my $key = $args{key} // die "seal_message: missing key\n";
+    my $pt  = $args{plaintext} // '';
+    my $nonce = _rand_bytes(12);
+    my $ct = _xor_stream($key, $nonce, $pt);
+    my $tag = hmac_sha256($nonce . $ct, $key);  # bytes
+    my $tag_hex = unpack("H*", $tag);
+    return ($nonce, $tag_hex, $ct);
+}
+
+sub open_message {
+    my (%args) = @_;
+    my $key   = $args{key}   // die "open_message: missing key\n";
+    my $nonce = $args{nonce} // die "open_message: missing nonce\n";
+    my $tag_hex = $args{tag_hex} // die "open_message: missing tag_hex\n";
+    my $ct    = $args{ciphertext} // '';
+
+    my $want = unpack("H*", hmac_sha256($nonce . $ct, $key));
+    return (0, undef) if lc($want) ne lc($tag_hex);
+
+    my $pt = _xor_stream($key, $nonce, $ct);
+    return (1, $pt);
 }
 
 # --- Counter party mapping -------------------------------------------------
@@ -136,8 +216,11 @@ $sel->add(\*STDIN);
 sub _prompt { print "secmsg> "; }
 
 print "Connected to $server (radio net mode)\n";
-print "Enter text to transmit to the net. /quit to exit.\n";
-print "Traffic you cannot decrypt is ignored by default; use -v to see BACKGROUND SIGNAL.\n\n";
+print "Commands:\n";
+print "  <text>        transmit encrypted text to the net\n";
+print "  /quit         exit\n";
+print "Flags:\n";
+print "  -v            show BACKGROUND SIGNAL for traffic you can't decrypt\n\n";
 _prompt();
 
 while (1) {
@@ -163,14 +246,24 @@ while (1) {
 
             next unless $type eq 'M';
 
-            my ($sender_id, $nonce_b64, $tag_hex, $rot13_b64ct) = split(/\0/, $bytes, 4);
-            next unless defined $sender_id && defined $nonce_b64 && defined $tag_hex && defined $rot13_b64ct;
+            my ($sender_id, $nonce_b64, $tag_hex, $ct_b64) = split(/\0/, $bytes, 4);
+            next unless defined $sender_id && defined $nonce_b64 && defined $tag_hex && defined $ct_b64;
+
+            my $nonce = eval { decode_base64($nonce_b64) };
+            my $ct    = eval { decode_base64($ct_b64) };
+            if ($@ || !defined($nonce) || !defined($ct)) {
+                if ($verbose) {
+                    print "\nBACKGROUND SIGNAL\n";
+                    _prompt();
+                }
+                next;
+            }
 
             my ($ok, $pt) = open_message(
-                key          => $key_str,
-                nonce_b64     => $nonce_b64,
-                tag_hex       => $tag_hex,
-                rot13_b64ct   => $rot13_b64ct,
+                key        => $key_str,
+                nonce      => $nonce,
+                tag_hex    => $tag_hex,
+                ciphertext => $ct,
             );
 
             if ($ok) {
@@ -192,6 +285,7 @@ while (1) {
             exit 0;
         }
         $in =~ s/\r?\n$//;
+
         next if $in =~ /^\s*$/ && _prompt();
 
         if ($in =~ m{^/quit\b}i) {
@@ -199,16 +293,16 @@ while (1) {
             exit 0;
         }
 
-        my ($nonce_b64, $tag_hex, $rot13_b64ct) = seal_message(
+        my ($nonce, $tag_hex, $ct) = seal_message(
             key       => $key_str,
             plaintext => $in,
         );
 
         my $payload = join("\0",
             "", # sender_id slot is filled by server; client leaves blank
-            $nonce_b64,
+            encode_base64($nonce, ''),
             $tag_hex,
-            $rot13_b64ct,
+            encode_base64($ct, ''),
         );
 
         print $sock encode_frame('M', $payload);
