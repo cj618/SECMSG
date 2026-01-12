@@ -1,5 +1,17 @@
-\
-#!/usr/bin/env perl
+#!/usr/bin/perl
+
+#
+# secmsg — client for a lightweight encrypted message relay,
+#          based on a layered cryptographic stack.
+#
+# Copyright (c) 2026, C R Jervis.
+# Released under the BSD License. See LICENSE file for details. 
+#
+# The client handles encryption, message formatting, and display.
+# All message payloads are encrypted before transmission.
+#
+#
+
 use strict;
 use warnings;
 

@@ -1,5 +1,16 @@
-\
-#!/usr/bin/env perl
+#!/usr/bin/perl
+
+#
+# secmsgd — relay daemon for secmsg.
+#
+# Copyright (c) 2026, C R Jervis. 
+# Released under the BSD License. See LICENSE file for details.
+#
+#
+# The server is intentionally minimal and does not decrypt
+# message payloads. It routes opaque frames between clients.
+#
+
 use strict;
 use warnings;
 
