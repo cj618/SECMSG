@@ -1,0 +1,9 @@
+# secmsg.conf.example
+# Client configuration example. The client currently uses flags,
+# but this shows the shape we’ll likely support soon.
+
+server = 127.0.0.1:7337
+user   = alice
+
+# cipher = legacy_blowfish_skipjack_rot13
+# keyfile = ~/.secmsg/key.txt

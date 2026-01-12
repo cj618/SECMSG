@@ -1,0 +1,8 @@
+# secmsgd.conf.example
+# Server configuration example. The server currently uses flags.
+
+listen = 0.0.0.0
+port   = 7337
+
+# auth = shared_secret
+# secret_file = /etc/secmsgd.secret
