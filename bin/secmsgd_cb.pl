@@ -4,8 +4,8 @@
 #          based on a layered cryptographic stack.
 #
 #
-# Copyright (c) 2026 C R Jervis
-# BSD 2-Clause License (see LICENSE)
+# Copyright (c) 2026 C R Jervis under the terms in the accompanying LICENSE file
+#
 #
 
 use strict;

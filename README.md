@@ -3,7 +3,7 @@
 **secmsg** – a lightweight encrypted message relay, based on a layered cryptographic stack.
 
 ## What this is
-secmsg is a minimal, ICB/IRC-inspired messaging relay designed for terminal use and end-to-end encrypted payloads.
+secmsg is a minimal, ICB-inspired messaging relay designed for terminal use and end-to-end encrypted payloads.
 The server (`secmsgd`) is intentionally “dumb”: it routes opaque ciphertext frames and never decrypts message bodies.
 
 ## Quick start (OpenBSD)
